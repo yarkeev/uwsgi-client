@@ -6,6 +6,23 @@ import * as zlib from 'zlib';
 
 import { IUwsgiClientOptions, IUwsgiClientResponse } from './types';
 
+const HEADERS_WITHOUT_PREFIX: string[] = [
+	'QUERY_STRING',
+	'REQUEST_METHOD',
+	'CONTENT_TYPE',
+	'CONTENT_LENGTH',
+	'REQUEST_URI',
+	'PATH_INFO',
+	'DOCUMENT_ROOT',
+	'SERVER_PROTOCOL',
+	'REQUEST_SCHEME',
+	'HTTPS',
+	'REMOTE_ADDR',
+	'REMOTE_PORT',
+	'SERVER_PORT',
+	'SERVER_NAME',
+];
+
 export class UwsgiClient extends ClientRequest {
 
 	protected bodySize = 0;
@@ -28,6 +45,7 @@ export class UwsgiClient extends ClientRequest {
 			protocol: 'uwsgi:',
 			modifier1: 5,
 			bufferSize: 16384,
+			headersWithoutChanges: [],
 			...options,
 		};
 
@@ -86,10 +104,7 @@ export class UwsgiClient extends ClientRequest {
 	protected _implicitHeader() {
 		let offset = 4;
 
-		const vars: Record<string, string> = {
-			...this.vars,
-			...(this.options.headers as Record<string, string>),
-		};
+		const vars = { ...this.vars };
 
 		const parsedPath = url.parse(this.path);
 
@@ -100,6 +115,24 @@ export class UwsgiClient extends ClientRequest {
 		vars.QUERY_STRING = vars.QUERY_STRING || parsedPath.query || '';
 		vars.CONTENT_TYPE = vars.CONTENT_TYPE || '';
 		vars.CONTENT_LENGTH = this.bodySize ? String(this.bodySize) : (vars.CONTENT_LENGTH || '');
+
+		Object.keys(this.options.headers).forEach((key) => {
+			let name = key.replace(/-/g, '_').toUpperCase();
+
+			if (!HEADERS_WITHOUT_PREFIX.includes(name)) {
+				name = 'HTTP_' + name;
+			}
+
+			vars[name] = vars[name] || this.options.headers[key] as string;
+		});
+
+		this.options.headersWithoutChanges.forEach((key) => {
+			const value = this.options.headers[key.toLowerCase()];
+
+			if (value) {
+				vars[key] = value as string;
+			}
+		});
 
 		const buffer = new Buffer(this.bufferSize);
 
@@ -172,15 +205,15 @@ export class UwsgiClient extends ClientRequest {
 			const { method, body } = options;
 			const request = new UwsgiClient(options);
 
-			request.once('response', async (response) => {
-				const raw = await this.getResponseBody(response);
-				let data = {} as R;
+			request
+				.once('response', async (response) => {
+					const raw = await this.getResponseBody(response);
+					let data = {} as R;
 
-				try {
-					data = JSON.parse(raw) as R;
-				} catch (err) {}
+					try {
+						data = JSON.parse(raw) as R;
+					} catch (err) {}
 
-				if (response.statusCode >= 200 && response.statusCode < 300) {
 					resolve({
 						status: response.statusCode,
 						statusText: response.statusMessage,
@@ -188,20 +221,8 @@ export class UwsgiClient extends ClientRequest {
 						data,
 						headers: response.headers as Record<string, string>,
 					});
-				} else {
-					const err = new Error('UwsgiClientError') as Error & { response: IUwsgiClientResponse };
-
-					err.response = {
-						status: response.statusCode,
-						statusText: response.statusMessage,
-						raw,
-						data,
-						headers: response.headers as Record<string, string>,
-					};
-
-					reject(err);
-				}
-			});
+				})
+				.once('error', (err) => reject(err));
 
 			if (String(method).toLowerCase() === 'get' || !body) {
 				request.end();
