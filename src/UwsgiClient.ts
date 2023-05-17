@@ -23,6 +23,10 @@ const HEADERS_WITHOUT_PREFIX: string[] = [
 	'SERVER_NAME',
 ];
 
+const agent = (new Agent({ keepAlive: true })) as Agent & { protocol: string };
+
+agent.protocol = 'uwsgi:';
+
 export class UwsgiClient extends ClientRequest {
 
 	protected bodySize = 0;
@@ -39,8 +43,6 @@ export class UwsgiClient extends ClientRequest {
 	public path: string;
 
 	constructor(options: IUwsgiClientOptions) {
-		const agent = (new Agent()) as Agent & { protocol: string };
-
 		options = {
 			protocol: 'uwsgi:',
 			modifier1: 5,
@@ -49,7 +51,6 @@ export class UwsgiClient extends ClientRequest {
 			...options,
 		};
 
-		agent.protocol = 'uwsgi:';
 		options.agent = agent;
 
 		super(options);
@@ -95,7 +96,7 @@ export class UwsgiClient extends ClientRequest {
 		const proto = ClientRequest.prototype as unknown as { _send(...sendArgs: unknown[]): unknown };
 
 		if (!this._headerSent) {
-			return proto._send.call(this, new Buffer(0)) as unknown;
+			proto._send.call(this, new Buffer(0)) as unknown;
 		}
 
 		return proto._send.apply(this, args) as unknown;
@@ -115,6 +116,7 @@ export class UwsgiClient extends ClientRequest {
 		vars.QUERY_STRING = vars.QUERY_STRING || parsedPath.query || '';
 		vars.CONTENT_TYPE = vars.CONTENT_TYPE || '';
 		vars.CONTENT_LENGTH = this.bodySize ? String(this.bodySize) : (vars.CONTENT_LENGTH || '');
+		vars.REMOTE_ADDR = vars.REMOTE_ADDR || this.options.headers['x-real-ip'] as string || '';
 
 		Object.keys(this.options.headers).forEach((key) => {
 			let name = key.replace(/-/g, '_').toUpperCase();
@@ -203,7 +205,27 @@ export class UwsgiClient extends ClientRequest {
 	static async request<R = unknown>(options: IUwsgiClientOptions): Promise<IUwsgiClientResponse<R>> {
 		return new Promise((resolve, reject) => {
 			const { method, body } = options;
-			const request = new UwsgiClient(options);
+			const hasBody = Boolean(body) && !['get', 'delete'].includes(String(method).toLocaleLowerCase());
+			const hasContentTypeHeader = Object.keys(options.headers)
+				.map((header) => header.toLowerCase())
+				.includes('content-type');
+			const request = new UwsgiClient({
+				...options,
+				...(
+					hasContentTypeHeader || !hasBody
+						? {}
+						: {
+							headers: {
+								...options.headers,
+								'Content-Type': 'application/x-www-form-urlencoded',
+							},
+						}
+				),
+			});
+
+			if (options.timeout) {
+				request.setTimeout(options.timeout);
+			}
 
 			request
 				.once('response', async (response) => {
@@ -224,7 +246,7 @@ export class UwsgiClient extends ClientRequest {
 				})
 				.once('error', (err) => reject(err));
 
-			if (String(method).toLowerCase() === 'get' || !body) {
+			if (!hasBody) {
 				request.end();
 			} else {
 				const bodyParams = body as Record<string, string>;

@@ -6,6 +6,7 @@ export interface IUwsgiClientOptions extends ClientRequestArgs {
 	modifier2?: number;
 
 	body?: unknown;
+	timeout?: number;
 	headersWithoutChanges?: string[];
 }
 
