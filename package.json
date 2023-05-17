@@ -1,6 +1,6 @@
 {
 	"name": "uwsgi-client",
-	"version": "0.0.9",
+	"version": "0.0.10",
 	"description": "nodejs UWSGI client",
 	"main": "dist/index",
 	"typings": "dist/index",

@@ -244,6 +244,10 @@ export class UwsgiClient extends ClientRequest {
 						headers: response.headers as Record<string, string>,
 					});
 				})
+				.once('timeout', () => {
+					request.end();
+					reject(new Error('UWSGI request timeout'));
+				})
 				.once('error', (err) => reject(err));
 
 			if (!hasBody) {
